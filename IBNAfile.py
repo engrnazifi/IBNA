@@ -330,7 +330,7 @@ OTP_ADMIN_ID = 6603268127
 
 
 BOT_USERNAME = "Aslamtv2bot"
-CHANNEL = "@Aslammovieschannel"
+CHANNEL = "@buydatachannel"
 
 # Flutterwave
 FLW_PUBLIC_KEY = os.getenv("FLW_PUBLIC_KEY")
@@ -359,7 +359,6 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 # ========= FLASK =========
 app = Flask(__name__)
-
 
 # ========= FLUTTERWAVE PAYMENT =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
@@ -559,7 +558,6 @@ def telegram_webhook():
     )
     bot.process_new_updates([update])
     return "OK", 200
-
 
 
 # ================= ALL FILMS (GROUP AWARE) ============
@@ -1706,8 +1704,8 @@ def reply_menu(uid=None):
     )
 
     if uid in ADMINS:
-       
-        kb.add(InlineKeyboardButton("☢SERIES & ADD", callback_data="groupitems"))
+        kb.add(InlineKeyboardButton("🏆ADD MOVIE", callback_data="addmovie"))
+        kb.add(InlineKeyboardButton("☢SERIES MODE", callback_data="groupitems"))
         kb.add(InlineKeyboardButton("🧹 ERASER", callback_data="eraser_menu"))
         kb.add(InlineKeyboardButton("📂WEAK UPDATE", callback_data="weak_update"))
         
@@ -2248,10 +2246,14 @@ def parse_caption_for_title_price(text):
 
 
 
+
+  
+
 @bot.message_handler(
     func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_states
 )
 def admin_inputs(message):
+
     try:
         state_entry = admin_states.get(message.from_user.id)
         if not state_entry:
@@ -2259,54 +2261,160 @@ def admin_inputs(message):
 
         state = state_entry.get("state")
 
-        # ⚠️ NOTE:
-        # An cire ADD MOVIE logic, amma sauran admin states
-        # (weak_update, update_week, da sauransu)
-        # suna nan a sauran code ɗinka
+ 
 
-        return
+        # ADD MOVIE FLOW
+        # =========================================================
+        if state not in ("add_movie_wait_file", "add_movie_wait_poster"):
+            return
+
+        # =====================================================
+        # STEP 1: WAIT FILE
+        # =====================================================
+        if state == "add_movie_wait_file":
+            file_id = None
+            file_name = None
+
+            if message.content_type == "video":
+                file_id = message.video.file_id
+            elif message.content_type == "document":
+                file_id = message.document.file_id
+                file_name = message.document.file_name
+            else:
+                bot.reply_to(
+                    message,
+                    "❌ Tura fim (video ko document kawai)."
+                )
+                return
+
+            admin_states[ADMIN_ID] = {
+                "state": "add_movie_wait_poster",
+                "temp_file_id": file_id,
+                "temp_file_name": file_name
+            }
+
+            bot.send_message(
+                ADMIN_ID,
+                "✅ Na karɓi fim.\n\n"
+                "Yanzu aika POSTER (hoto) tare da caption:\n"
+                "Misali: Fashin banki 200"
+            )
+            return
+
+        # =====================================================
+        # STEP 2: WAIT POSTER
+        # =====================================================
+        if state == "add_movie_wait_poster":
+            st = admin_states.get(ADMIN_ID)
+
+            if message.content_type not in ("photo", "video"):
+                bot.reply_to(
+                    message,
+                    "❌ Sai POSTER (hoto) ko SHORT VIDEO tare da caption."
+                )
+                return
+
+            title, price = parse_caption_for_title_price(message.caption or "")
+            if not title or not price:
+                bot.reply_to(message, "❌ Caption bai dace ba.")
+                return
+
+            poster_file_id = None
+            poster_type = None
+
+            if message.content_type == "photo":
+                poster_file_id = message.photo[-1].file_id
+                poster_type = "photo"
+            elif message.content_type == "video":
+                poster_file_id = message.video.file_id
+                poster_type = "video"
+
+            sent_movie = bot.send_document(STORAGE_CHANNEL, st["temp_file_id"])
+
+            storage_file_id = sent_movie.document.file_id
+            storage_msg_id = sent_movie.message_id
+            created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+            # ❌ AN HANA INSERT A MOVIES
+            # ❌ AN HANA INSERT A MOVIES
+            # ❌ AN HANA INSERT A MOVIES
+
+            cur = conn.execute(
+                """
+                INSERT INTO items
+                (title, price, file_id, file_name, created_at, channel_msg_id, channel_username)
+                VALUES (?,?,?,?,?,?,?)
+                """,
+                (
+                    title,
+                    price,
+                    storage_file_id,
+                    st.get("temp_file_name"),
+                    created_at,
+                    storage_msg_id,
+                    STORAGE_CHANNEL
+                )
+            )
+            item_id = cur.lastrowid
+            conn.commit()
+
+            caption = f"🎬 <b>{title}</b>\n💵Price:₦{price}"
+
+            # ⚠️ movie_buttons_inline BA A CANZA BA
+            markup = movie_buttons_inline(item_id, user_id=None)
+
+            if poster_type == "photo":
+                sent_poster = bot.send_photo(
+                    CHANNEL,
+                    poster_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+
+            if poster_type == "video":
+                sent_poster = bot.send_video(
+                    CHANNEL,
+                    poster_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+
+            conn.execute(
+                "UPDATE items SET channel_msg_id=? WHERE id=?",
+                (sent_poster.message_id, item_id)
+            )
+            conn.commit()
+
+            bot.send_message(ADMIN_ID, f"✅ An gama lafiya!\nItem ID: {item_id}")
+            admin_states.pop(ADMIN_ID, None)
 
     except Exception as e:
-        print("ADMIN INPUT ERROR:", e)
-        return
+        print("ADD MOVIE ERROR:", e)
+        bot.reply_to(message, "❌ Kuskure yayin add movie.")
+        admin_states.pop(ADMIN_ID, None)
 
 
-# ========== CANCEL ==========
+    # ========== CANCEL ==========
 @bot.message_handler(commands=["cancel"])
 def cancel_cmd(message):
-    if (
-        message.from_user.id == ADMIN_ID
-        and admin_states.get(ADMIN_ID)
-        and admin_states[ADMIN_ID].get("state") in ("weak_update", "update_week")
-    ):
+    if message.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID) and admin_states[ADMIN_ID].get("state") in ("weak_update", "update_week"):
         inst = admin_states[ADMIN_ID]
         inst_msg_id = inst.get("inst_msg_id")
-
         if inst_msg_id:
             try:
-                bot.delete_message(
-                    chat_id=ADMIN_ID,
-                    message_id=inst_msg_id
-                )
+                bot.delete_message(chat_id=ADMIN_ID, message_id=inst_msg_id)
             except Exception as e:
                 print("Failed to delete instruction message on cancel:", e)
-
         admin_states.pop(ADMIN_ID, None)
-        bot.reply_to(
-            message,
-            "An soke Update/Weak update kuma an goge sakon instruction."
-        )
+        bot.reply_to(message, "An soke Update/Weak update kuma an goge sakon instruction.")
         return
 
     if message.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID):
         admin_states.pop(ADMIN_ID, None)
-        bot.reply_to(
-            message,
-            "An soke aikin admin na yanzu."
-        )
+        bot.reply_to(message, "An soke aikin admin na yanzu.")
         return
-  
-
 
 # ==================================================
 # ========== GET CART (GROUP-AWARE SAFE) ============
@@ -3702,7 +3810,7 @@ def groupitem_deeplink_handler(msg):
     dbg = (
         "🤩<b>SERIES ORDER CREATED</b>\n\n"
         f"• {display_title}\n"
-        f"📦 Films: {len(items)}\n"
+        f"📦 Episodes: {len(items)}\n"
     )
 
     bot.send_message(uid, dbg, parse_mode="HTML")
@@ -3835,7 +3943,7 @@ def buy_again_handler(c):
     if len(items) > 1:
         dbg = (
             "🔁 <b>BUY AGAIN – GROUP ORDER</b>\n\n"
-            f"📦 Films: {len(items)}"
+            f"📦 Episodes: {len(items)}"
         )
     else:
         dbg = (
@@ -5992,7 +6100,17 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
    
 
    
-   
+    # =====================
+    # ADD MOVIE (ADMIN)
+    # =====================
+    if data == "addmovie":
+        if uid != ADMIN_ID:
+            bot.answer_callback_query(c.id, "Only admin.")
+            return
+        admin_states[uid] = {"state": "add_movie_wait_file"}
+        bot.send_message(uid, "Turo film.")
+        bot.answer_callback_query(c.id)
+        return
     # =====================
     # WEEKLY BUY
     # =====================
