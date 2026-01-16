@@ -464,27 +464,41 @@ def send_feedback_prompt(user_id, order_id):
 @app.route("/webhook", methods=["POST"])
 def flutterwave_webhook():
 
-    print("🔔 WEBHOOK RECEIVED")
+    tg_print("WEBHOOK HIT")
 
-    signature = request.headers.get("verif-hash")
+    # --- HEADERS ---
+    headers = dict(request.headers)
+    tg_print("HEADERS", headers)
+
+    signature = headers.get("verif-hash")
     if not signature:
-        print("❌ Missing verif-hash")
+        tg_print("ERROR", "Missing verif-hash")
         return "Missing signature", 401
 
     if signature != FLW_WEBHOOK_SECRET:
-        print("❌ Invalid signature:", signature)
+        tg_print("ERROR", f"Invalid signature: {signature}")
         return "Invalid signature", 401
 
+    # --- PAYLOAD ---
     payload = request.json or {}
+    tg_print("RAW PAYLOAD", payload)
+
     data = payload.get("data", {})
     status = (data.get("status") or "").lower()
+    tg_print("STATUS", status)
 
     if status not in ("successful", "success"):
+        tg_print("IGNORED", "Payment not successful")
         return "Ignored", 200
 
     order_id = data.get("tx_ref")
     paid_amount = int(float(data.get("amount", 0)))
     currency = data.get("currency")
+
+    tg_print(
+        "PAYMENT INFO",
+        f"order_id={order_id}, amount={paid_amount}, currency={currency}"
+    )
 
     row = conn.execute(
         "SELECT user_id, amount, paid FROM orders WHERE id=?",
@@ -492,31 +506,42 @@ def flutterwave_webhook():
     ).fetchone()
 
     if not row:
+        tg_print("DB ERROR", "Order not found")
         return "Order not found", 200
 
     user_id, expected_amount, paid = row
+    tg_print(
+        "DB ORDER",
+        f"user_id={user_id}, expected={expected_amount}, paid={paid}"
+    )
 
     if paid == 1:
+        tg_print("SKIP", "Order already processed")
         return "Already processed", 200
 
     if paid_amount != expected_amount or currency != "NGN":
+        tg_print(
+            "AMOUNT ERROR",
+            f"expected={expected_amount}, got={paid_amount}"
+        )
         return "Wrong payment", 200
 
-    # 🔐 ORDER_ITEMS GUARD (ITEM SYSTEM)
     items_count = conn.execute(
         "SELECT COUNT(*) FROM order_items WHERE order_id=?",
         (order_id,)
     ).fetchone()[0]
 
+    tg_print("ITEMS COUNT", items_count)
+
     if items_count == 0:
-        print("❌ Order has no items:", order_id)
+        tg_print("ERROR", "Order has no items")
         return "Empty order", 200
 
-    # ✅ CONFIRM PAYMENT
+    # --- CONFIRM ---
     conn.execute("UPDATE orders SET paid=1 WHERE id=?", (order_id,))
     conn.commit()
+    tg_print("SUCCESS", "Payment confirmed & saved")
 
-    # USER BUTTON
     kb = InlineKeyboardMarkup()
     kb.add(
         InlineKeyboardButton(
@@ -527,35 +552,16 @@ def flutterwave_webhook():
 
     bot.send_message(
         user_id,
-        f"""🎉 <b>We received your payment successfully!</b>
+        f"""🎉 <b>Payment Successful</b>
 
 🧾 Order ID: <code>{order_id}</code>
 💳 Amount: ₦{paid_amount}
-
-Danna ƙasa domin karɓa:""",
-        parse_mode="HTML",
+""",
         reply_markup=kb
     )
 
-    # ===== GROUP NOTIFICATION =====
-    if PAYMENT_NOTIFY_GROUP:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        bot.send_message(
-            PAYMENT_NOTIFY_GROUP,
-            f"""✅ <b>NEW PAYMENT RECEIVED</b>
-
-👤 User ID: <code>{user_id}</code>
-📦 Items: {items_count}
-🧾 Order ID: <code>{order_id}</code>
-💰 Amount: ₦{paid_amount}
-⏰ Time: {now}""",
-            parse_mode="HTML"
-        )
-
-    print("🚀 WEBHOOK DONE:", order_id)
+    tg_print("DONE", f"Order {order_id} completed")
     return "OK", 200
-
 
 
 
