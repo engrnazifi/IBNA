@@ -361,8 +361,6 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 app = Flask(__name__)
 
 
-import time
-
 # ========= FLUTTERWAVE PAYMENT =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
@@ -375,9 +373,7 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     }
 
     payload = {
-        # ✅ GYARA ƊAYA KAWAI (SABON tx_ref)
-        "tx_ref": f"{order_id}-{int(time.time())}",
-
+        "tx_ref": str(order_id),
         "amount": int(amount),
         "currency": "NGN",
         "redirect_url": FLW_REDIRECT_URL,
@@ -410,7 +406,6 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     except Exception as e:
         print("❌ create_flutterwave_payment error:", e)
         return None
-
 
 # ========= HOME / KEEP ALIVE =========
 @app.route("/")
@@ -564,6 +559,7 @@ def telegram_webhook():
     )
     bot.process_new_updates([update])
     return "OK", 200
+
 
 
 # ================= ALL FILMS (GROUP AWARE) ============
